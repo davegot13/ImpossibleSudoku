@@ -31,6 +31,8 @@ final class GameStore: ObservableObject {
     @Published private(set) var bankLoaded = false
     @Published var showSettings = false
     @Published var showHowTo = false
+    /// App Clip only: presents the App Store overlay for the full app.
+    @Published var showFullApp = false
     /// A tier picked before the first "How to play"; the run starts when it closes.
     @Published var pendingTierAfterHowTo: Tier?
 
@@ -175,6 +177,7 @@ final class GameStore: ObservableObject {
     }
 
     private func enterGame(keepHint: Bool = false) {
+        showFullApp = false
         guard let r = run else { return }
         let keptHint = keepHint ? hint : nil
         solution = Sudoku.solve(Sudoku.parse(r.game.puzzle)).solution ?? []
@@ -593,6 +596,7 @@ final class GameStore: ObservableObject {
 
     func closeOverlayToHome() {
         overlay = nil
+        showFullApp = false
         paused = false
         goHome()
     }
@@ -621,6 +625,48 @@ final class GameStore: ObservableObject {
         run = r
         hint = nil; hintCardOpen = false
         if let last = empties.last { selection = [last]; primary = last }
+        setPaused(false)
+        save()
+    }
+
+    /// Sets up a good-looking mid-run board for App Store screenshots: every easy step done,
+    /// candidates filled in, the next step needs a named technique, a live x4 combo and a focus digit.
+    func debugShowcase() {
+        guard var r = run else { return }
+        let s = GraderState(r.game.vals)
+        var nextHard: Step? = nil
+        for _ in 0..<400 {
+            guard let st = Grader.nextStep(s) else { break }
+            if (Grader.weights[st.tech] ?? 0) >= 4.0 { nextHard = st; break }
+            s.apply(st)
+        }
+        for i in 0..<81 where r.game.vals[i] == 0 && s.vals[i] != 0 {
+            r.game.vals[i] = s.vals[i]
+        }
+        for i in 0..<81 {
+            r.game.notes[i] = r.game.vals[i] == 0 ? s.cand[i] : 0
+            r.game.cross[i] = 0
+        }
+        // Cross out what the technique removes, so the notes look worked on.
+        if let st = nextHard {
+            for e in st.elim where r.game.vals[e.cell] == 0 { r.game.cross[e.cell] |= Sudoku.bit(e.digit) }
+        }
+        r.game.elapsed = 402
+        r.game.combo = 4
+        r.game.lastAt = 400
+        r.game.mistakes = 0; r.game.hints = 0; r.game.reveals = 0; r.game.penalties = 0
+        r.score = 18_640
+        r.solved = max(r.solved, 3)
+        r.bestCombo = max(r.bestCombo, 5)
+        r.hearts = 3
+        run = r
+        clock.elapsed = r.game.elapsed
+        hint = nil; hintCardOpen = false
+        notesMode = false
+        if let st = nextHard, let d = st.elim.first?.digit ?? st.place.first?.digit {
+            digitHighlight = d
+        }
+        selection = []; primary = -1
         setPaused(false)
         save()
     }

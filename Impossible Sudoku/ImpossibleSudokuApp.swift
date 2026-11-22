@@ -61,6 +61,7 @@ struct RootView: View {
         .fullScreenCover(isPresented: $store.showHowTo) {
             HowToPlayView().environmentObject(store).preferredColorScheme(scheme)
         }
+        .fullAppOverlay(isPresented: $store.showFullApp)
         .onChange(of: scenePhase) { _, phase in
             store.appActive = phase == .active
             if phase == .background { store.appWentToBackground() }

@@ -206,6 +206,7 @@ struct PauseContent: View {
             HStack(spacing: 8) {
                 Button("Debug: fill all but one") { store.debugFillAllButOne() }
                 Button("Debug: 1 heart") { store.debugOneHeart() }
+                Button("Debug: showcase") { store.debugShowcase() }
                 Button("Debug: theme") {
                     let cur = UserDefaults.standard.integer(forKey: SettingsKey.appearance)
                     UserDefaults.standard.set((cur + 1) % 3, forKey: SettingsKey.appearance)
@@ -350,6 +351,10 @@ struct SolvedContent: View {
 
             PrimaryButton(title: "Next puzzle") { store.nextPuzzle() }
                 .padding(.top, 18)
+            if Edition.isClip {
+                SecondaryButton(title: "Get the full app") { store.showFullApp = true }
+                    .padding(.top, 4)
+            }
             SecondaryButton(title: "Home") { store.closeOverlayToHome() }
                 .padding(.top, 4)
         }
@@ -460,6 +465,10 @@ struct RunOverContent: View {
 
             PrimaryButton(title: "New run") { store.startRun(r.tier) }
                 .padding(.top, 20)
+            if Edition.isClip {
+                SecondaryButton(title: "Get the full app") { store.showFullApp = true }
+                    .padding(.top, 4)
+            }
             SecondaryButton(title: "Home") { store.closeOverlayToHome() }
                 .padding(.top, 4)
         }

@@ -153,7 +153,7 @@ struct HomeView: View {
             VStack(spacing: 12) {
                 ForEach(Tier.allCases) { tier in
                     Button { tapTier(tier) } label: {
-                        TierCard(tier: tier, best: store.best(tier), count: store.bank[tier]?.count ?? 0)
+                        TierCard(tier: tier, best: store.best(tier), count: store.bank[tier]?.count ?? 0, locked: Edition.isLocked(tier))
                     }
                     .buttonStyle(CardPressStyle())
                     .hoverEffect(.lift)
@@ -180,10 +180,12 @@ struct HomeView: View {
     }
 
     private func tapTier(_ t: Tier) {
+        if Edition.isLocked(t) { store.showFullApp = true; return }
         if store.run != nil { pendingTier = t } else { begin(t) }
     }
 
     private func begin(_ t: Tier) {
+        store.showFullApp = false
         if !seenHowTo {
             store.pendingTierAfterHowTo = t
             store.showHowTo = true
@@ -238,6 +240,7 @@ struct TierCard: View {
     let tier: Tier
     let best: Best
     let count: Int
+    var locked = false
 
     private var stats: [String] {
         var s: [String] = []
@@ -263,13 +266,13 @@ struct TierCard: View {
                 Text(tier.blurb).font(Typo.callout).foregroundStyle(Palette.onGround2).lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
                 Rectangle().fill(Palette.hairline).frame(height: 1).padding(.vertical, 4)
-                Text(stats.isEmpty ? "\(count.formatted()) puzzles · Not played yet" : stats.joined(separator: " · "))
+                Text(locked ? "\(count.formatted()) puzzles in the full app" : stats.isEmpty ? "\(count.formatted()) puzzles · Not played yet" : stats.joined(separator: " · "))
                     .font(Typo.footnote).monospacedDigit()
                     .foregroundStyle(Palette.onGround2)
                     .lineLimit(2)
             }
             Spacer(minLength: 0)
-            Image(systemName: "chevron.right").font(.system(size: 15, weight: .semibold)).foregroundStyle(Palette.onGround3)
+            Image(systemName: locked ? "lock.fill" : "chevron.right").font(.system(size: 15, weight: .semibold)).foregroundStyle(Palette.onGround3)
         }
         .padding(16)
         .background(Palette.surface, in: RoundedRectangle(cornerRadius: Metrics.cardRadius, style: .continuous))
@@ -281,8 +284,8 @@ struct TierCard: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(tier.name), rated \(tier.range)")
-        .accessibilityValue(stats.isEmpty ? "Not played yet" : stats.joined(separator: ", "))
-        .accessibilityHint("Starts a run")
+        .accessibilityValue(locked ? "In the full app" : stats.isEmpty ? "Not played yet" : stats.joined(separator: ", "))
+        .accessibilityHint(locked ? "Shows the full app in the App Store" : "Starts a run")
     }
 
     private var tierCells: Set<Int> {
