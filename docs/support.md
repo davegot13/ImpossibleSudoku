@@ -1,4 +1,4 @@
-# Impossible Sudoku Support
+# Impossibly Hard Sudoku Support
 
 Email davegot+impossiblesudoku@gmail.com with questions, bug reports, or feature requests. Include your device model and iOS version if you are reporting a bug.
 
