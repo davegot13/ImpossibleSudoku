@@ -10,8 +10,8 @@ struct HowToPlayView: View {
     private let pages: [(title: String, body: String)] = [
         ("Every digit scores", "Place the right digit to score. Place the next one within 20 seconds to grow your combo, up to ×5."),
         ("Notes for many cells", "Turn on Notes, then tap or drag across cells. A digit you press goes into all of them."),
-        ("Cross out", "In Notes, press a digit that's already noted to strike it. Press it again to bring it back."),
-        ("Spot a digit", "Press a number with nothing selected, or tap a placed digit. Every copy lights up, and so does every cell that could hold it."),
+        ("Cross out", "In Notes, press a digit that's already noted to cross it out. Press it again to remove it."),
+        ("Spot a digit", "Tap a number on the board, or press one with nothing selected. Every copy lights up, and so does every cell where you noted it. Tap it again to turn the light off."),
         ("Scoring", ""),
     ]
 
@@ -19,13 +19,18 @@ struct HowToPlayView: View {
         VStack(spacing: 0) {
             HStack {
                 Spacer()
-                Button("Skip") { finish() }
-                    .font(Typo.headline)
-                    .foregroundStyle(Palette.onGround2)
-                    .frame(minWidth: 44, minHeight: 44)
-                    .opacity(page < pages.count - 1 ? 1 : 0)
-                    .disabled(page >= pages.count - 1)
-                    .accessibilityHidden(page >= pages.count - 1)
+                Button { finish() } label: {
+                    // The frame sits inside the label so the whole 44 pt square takes the tap.
+                    Text(store.pendingTierAfterHowTo == nil ? "Close" : "Skip")
+                        .font(Typo.headline)
+                        .foregroundStyle(Palette.onGround2)
+                        .frame(minWidth: 44, minHeight: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .opacity(page < pages.count - 1 ? 1 : 0)
+                .disabled(page >= pages.count - 1)
+                .accessibilityHidden(page >= pages.count - 1)
             }
             .padding(.horizontal, 16)
 
@@ -47,7 +52,7 @@ struct HowToPlayView: View {
             .tabViewStyle(.page(indexDisplayMode: .always))
             .indexViewStyle(.page(backgroundDisplayMode: .interactive))
 
-            PrimaryButton(title: page < pages.count - 1 ? "Next" : "Let's play") {
+            PrimaryButton(title: page < pages.count - 1 ? "Next" : (store.pendingTierAfterHowTo == nil ? "Done" : "Let's play")) {
                 if page < pages.count - 1 { withAnimation(Motion.settle) { page += 1 } } else { finish() }
             }
             .padding(.horizontal, 24)
@@ -99,20 +104,23 @@ struct HowToPlayView: View {
         seenHowTo = true
         dismiss()
         if let t = store.pendingTierAfterHowTo {
-            store.pendingTierAfterHowTo = nil
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { withAnimation(Motion.settle) { store.startRun(t) } }
+            // Cleared only when the run starts, so the buttons keep their labels while this screen slides away.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                store.pendingTierAfterHowTo = nil
+                withAnimation(Motion.settle) { store.startRun(t) }
+            }
         }
     }
 }
 
 private struct ScoringList: View {
     private let rules: [(String, String)] = [
-        ("star.fill", "Each correct digit scores 100 × (rating − 3) × your combo."),
+        ("star.fill", "Each correct digit scores points. Harder puzzles and higher combos score more."),
         ("timer", "The next correct digit within 20 seconds grows the combo, up to ×5."),
-        ("heart.fill", "A wrong digit costs a heart and 250 points. Lose all 3 and the run ends."),
-        ("sparkles", "No mistakes and no hints earns a clean bonus and gives back a heart."),
+        ("heart.fill", "A wrong digit costs a heart and 250 points, and your score can drop below zero. Lose all 3 hearts and the run ends."),
+        ("sparkles", "Solve with no mistakes to get a heart back. Use no hints as well for a clean bonus."),
         ("stopwatch.fill", "Finish under par for a time bonus. Par starts at 15 minutes for a 4.0."),
-        ("lightbulb.fill", "A hint names the technique for 300 points. Revealing the digit costs 500 more."),
+        ("lightbulb.fill", "A hint costs 300 points and names the technique. Revealing the digit costs 500 more."),
     ]
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -196,7 +204,8 @@ private struct DemoBoard: View {
             let crossed = step == 1 || step == 2
             let notes = Sudoku.bit(2) | Sudoku.bit(5) | Sudoku.bit(7)
             CellView(size: cell, value: [0, 4, 8].contains(i) ? [3, 0, 0, 0, 1, 0, 0, 0, 9][i] : 0, given: true,
-                     notes: [0, 4, 8].contains(i) ? 0 : notes, cross: crossed && [1, 2, 5].contains(i) ? Sudoku.bit(2) : 0,
+                     notes: [0, 4, 8].contains(i) ? 0 : (step == 3 && [1, 2, 5].contains(i) ? notes & ~Sudoku.bit(2) : notes),
+                     cross: crossed && [1, 2, 5].contains(i) ? Sudoku.bit(2) : 0,
                      focusDigit: 0, focus: .none,
                      selected: [1, 2, 5].contains(i) && step < 3, hintKey: false, hintTarget: false,
                      wrongDigit: nil, wrongToken: 0, hidden: false, waveToken: 0, waveDelay: 0,

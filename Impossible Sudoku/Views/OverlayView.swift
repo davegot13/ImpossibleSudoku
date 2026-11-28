@@ -52,6 +52,7 @@ struct OverlayView: View {
                         .ignoresSafeArea(edges: [.bottom, .horizontal])
                 }
             }
+            .compositingGroup()   // one shadow for the sheet, not one per label on it
             .shadow(color: .black.opacity(0.35), radius: 32, y: 16)
             .padding(.horizontal, isPad ? 24 : 0)
             .offset(y: shown ? 0 : 40)
@@ -217,17 +218,18 @@ struct PauseContent: View {
             #endif
         }
         .alert("End this run?", isPresented: $confirmEnd) {
-            Button("End run", role: .destructive) {
-                store.overlay = nil
-                store.paused = false
-                _ = store.finishRun()
-                store.goHome()
-            }
+            Button("End run", role: .destructive) { store.endRun() }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Your score still counts toward your best.")
+            Text(endRunMessage(store.run))
         }
     }
+}
+
+/// What ending a run costs, in the confirmation.
+func endRunMessage(_ run: RunState?) -> String {
+    guard let r = run, r.score > 0 else { return "This puzzle and your hearts are lost." }
+    return "This puzzle and your hearts are lost. Your \(r.score.formatted()) points still count toward your best."
 }
 
 struct MenuRow: View {
@@ -279,6 +281,15 @@ struct SolvedContent: View {
         return parts.isEmpty ? "Used a hint" : parts.joined(separator: " · ")
     }
 
+    private func signed(_ n: Int) -> String { n < 0 ? "−\(abs(n).formatted())" : "+\(n.formatted())" }
+
+    /// Everything this puzzle added to the run: digits, bonuses and penalties.
+    private var puzzleNet: Int { s.points + s.timeBonus + (s.cleanBonus ?? 0) - s.penalties }
+    /// The run score before this puzzle began. `previousRunScore` can't be used here:
+    /// it is taken at the last digit, so it already holds this puzzle's digits and penalties.
+    private var earlierScore: Int { s.runScore - puzzleNet }
+    private var earlierText: String { earlierScore < 0 ? "−\(abs(earlierScore).formatted())" : earlierScore.formatted() }
+
     private var penaltyCaption: String {
         var parts: [String] = []
         if s.mistakes > 0 { parts.append(s.mistakes == 1 ? "1 mistake" : "\(s.mistakes) mistakes") }
@@ -289,7 +300,7 @@ struct SolvedContent: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("Puzzle \(s.puzzleNumber) solved").eyebrowStyle(Palette.badge)
+            Text("Puzzle \(s.puzzleNumber) solved").eyebrowStyle(Palette.coralText)
                 .accessibilityAddTraits(.isHeader)
                 .accessibilityFocused(titleFocused)
             Text(formatTime(s.elapsed))
@@ -319,23 +330,30 @@ struct SolvedContent: View {
                 Badge(text: String(format: "%.1f", s.rating), symbol: "flame.fill", fill: Palette.gold, ink: Palette.goldInk)
                 if s.fastestPB { Badge(text: "Fastest", symbol: "stopwatch.fill", fill: Palette.gold, ink: Palette.goldInk) }
                 if s.cleanBonus != nil { Badge(text: "Clean", symbol: "sparkles", fill: Palette.hintFill, ink: Palette.hint) }
-                if s.heartRestored { Badge(text: "Heart back", symbol: "heart.fill", fill: Palette.candidate, ink: Palette.badge) }
+                if s.heartRestored { Badge(text: "Heart back", symbol: "heart.fill", fill: Palette.candidate, ink: Palette.coralText) }
             }
             .padding(.top, 14)
             .padding(.bottom, 10)
 
             VStack(spacing: 0) {
                 row(0) { SummaryRow(label: "Digits and combos", value: s.points.formatted()) }
-                row(1) { SummaryRow(label: "Time bonus", value: "+\(s.timeBonus.formatted())") }
+                row(1) { SummaryRow(label: "Time bonus", value: "+\(s.timeBonus.formatted())", caption: s.timeBonus == 0 ? "Finished over par" : nil) }
                 row(2) {
                     if let c = s.cleanBonus {
                         SummaryRow(label: "Clean bonus", value: "+\(c.formatted())")
                     } else {
-                        SummaryRow(label: "Clean bonus", value: "—", caption: cleanMissCaption)
+                        SummaryRow(label: "Clean bonus", value: "+0", caption: cleanMissCaption)
                     }
                 }
                 if s.penalties > 0 {
                     row(3) { SummaryRow(label: "Penalties", value: "−\(s.penalties.formatted())", caption: penaltyCaption, valueColor: Palette.error) }
+                }
+                // The rows above are this puzzle only. From the second puzzle on, say what they add up to.
+                if s.puzzleNumber > 1 {
+                    row(4) {
+                        SummaryRow(label: "This puzzle", value: signed(puzzleNet),
+                                   caption: "Added to \(earlierText) from earlier puzzles")
+                    }
                 }
                 Divider().padding(.vertical, 4)
                 HStack(alignment: .firstTextBaseline) {
@@ -428,10 +446,10 @@ struct RunOverContent: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("Run over").eyebrowStyle(Palette.error)
+            Text(r.outOfHearts ? "Out of hearts" : "Run ended").eyebrowStyle(Palette.error)
                 .accessibilityAddTraits(.isHeader)
                 .accessibilityFocused(titleFocused)
-            Text("\(r.tier.name) · \(r.solved == 1 ? "1 puzzle" : "\(r.solved) puzzles")")
+            Text(r.outOfHearts ? "A wrong digit took your last heart. Final \(r.tier.name) score:" : "You ended this \(r.tier.name) run. Final score:")
                 .font(Typo.footnote).foregroundStyle(Palette.ink2)
                 .padding(.top, 2)
             Text(total, format: .number)
@@ -444,6 +462,8 @@ struct RunOverContent: View {
                     Badge(text: "New best", symbol: "crown.fill", fill: Palette.gold, ink: Palette.goldInk)
                         .scaleEffect(badgeIn ? 1 : 0.6)
                         .opacity(badgeIn ? 1 : 0)
+                } else if r.score <= 0 {
+                    Text("A run needs a score above zero to count as a best.").font(Typo.footnote).foregroundStyle(Palette.ink2)
                 } else if r.previousBest > 0 {
                     Text("Best \(r.previousBest.formatted())").font(Typo.footnote).foregroundStyle(Palette.ink2)
                 }
@@ -453,7 +473,7 @@ struct RunOverContent: View {
             HStack(spacing: 8) {
                 StatTile(value: "\(r.solved)", label: "Solved")
                 StatTile(value: "×\(r.bestCombo)", label: "Best combo")
-                StatTile(value: String(format: "%.1f", r.rating), label: "Last rating")
+                StatTile(value: String(format: "%.1f", r.rating), label: "Puzzle rating")
             }
             .padding(.top, 18)
 

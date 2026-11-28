@@ -216,6 +216,7 @@ struct BoardView: View {
     private func focusState(_ i: Int, focus: Int, fb: Int) -> CellFocus {
         guard focus > 0, !store.paused else { return .none }
         if game.vals[i] == focus { return .placed }
+        if let h = store.hint, h.cell == i || h.keyCells.contains(i) { return .none }   // hint cells never dim
         if game.vals[i] == 0 && game.notes[i] & fb != 0 && game.cross[i] & fb == 0 { return .candidate }
         return store.selection.contains(i) ? .none : .dim
     }
@@ -255,7 +256,7 @@ struct BoardView: View {
         guard store.notesMode else { return "Place \(d)" }
         let b = Sudoku.bit(d)
         if game.notes[i] & b == 0 { return "Add note \(d)" }
-        return game.cross[i] & b == 0 ? "Cross out \(d)" : "Restore \(d)"
+        return game.cross[i] & b == 0 ? "Cross out \(d)" : "Remove note \(d)"
     }
 }
 
@@ -360,11 +361,11 @@ struct CellView: View, Equatable {
 
     private var chipFill: Color? {
         if wrongDigit != nil && value == 0 { return Palette.errorFill }
-        if hintTarget { return Palette.hintFill }
         if focus == .placed { return Palette.focusFill }
         if selected { return Palette.selectFill }
-        if focus == .candidate { return Palette.candidate }
+        if hintTarget { return Palette.hintFill }
         if hintKey { return Palette.hintFill.opacity(0.6) }
+        if focus == .candidate { return Palette.candidate }
         return nil
     }
 
@@ -374,7 +375,7 @@ struct CellView: View, Equatable {
         } else if hintKey {
             chip.strokeBorder(Palette.hint, style: StrokeStyle(lineWidth: 2, dash: [4, 3])).padding(2)
         } else if selected {
-            chip.strokeBorder(focus == .placed ? Color.white : Palette.selectRing, lineWidth: 2).padding(2)
+            chip.strokeBorder(Palette.selectRing, lineWidth: 2).padding(2)
         }
     }
 
@@ -383,7 +384,7 @@ struct CellView: View, Equatable {
             Text("\(value)")
                 .font(.rounded(size * 0.62, given ? .bold : .medium))
                 .foregroundStyle(valueColor)
-                .opacity(focus == .dim ? 0.45 : 1)
+                .opacity(focus == .dim ? 0.7 : 1)
                 .offset(y: -size * 0.01)
                 .transition(reduceMotion ? AnyTransition.opacity : AnyTransition.scale(scale: 0.4).combined(with: .opacity))
         } else if let w = wrongDigit {
@@ -402,7 +403,7 @@ struct CellView: View, Equatable {
     }
 
     private var notesGrid: some View {
-        let inset = size * 0.07
+        let inset = size * 0.10   // keeps corner notes clear of selection and hint rings
         let slot = (size - 2 * inset) / 3
         let bold = legibility == .bold
         return ZStack(alignment: .topLeading) {
@@ -421,39 +422,44 @@ struct CellView: View, Equatable {
     @ViewBuilder private func note(_ d: Int, slot: CGFloat, bold: Bool) -> some View {
         let b = Sudoku.bit(d)
         let isFocus = d == focusDigit
-        let fontSize = size * (bold ? 0.28 : 0.26)
+        let fontSize = size * (bold ? 0.30 : 0.28)
         if cross & b != 0 {
+            // A ruled-out note sits well behind the live ones: faint digit, faint slash.
+            // It comes forward a little when its digit is the one in focus.
+            let fade: Double = isFocus ? 0.55 : (focus == .dim ? 0.35 : 0.45)
             Text("\(d)")
-                .font(.rounded(fontSize, isFocus || bold ? .semibold : .medium)).monospacedDigit()
-                .foregroundStyle(isFocus ? Palette.ink : Palette.note)
-                .opacity(isFocus ? 1 : (focus == .dim ? 0.45 : 0.8))
+                .font(.rounded(fontSize, bold ? .semibold : .medium)).monospacedDigit()
+                .foregroundStyle(Palette.note)
+                .opacity(fade)
                 .frame(width: slot, height: slot)
                 .overlay(
                     Slash()
-                        .stroke(Palette.slash, style: StrokeStyle(lineWidth: max(1.25, size * (isFocus ? 0.055 : 0.045)), lineCap: .round))
-                        .padding(slot * 0.14)
+                        .stroke(Palette.slash.opacity(isFocus ? 0.75 : (focus == .dim ? 0.4 : 0.55)),
+                                style: StrokeStyle(lineWidth: max(1, size * 0.032), lineCap: .round))
+                        .padding(slot * 0.12)
                 )
         } else if isFocus {
             Text("\(d)")
                 .font(.rounded(size * 0.23, .bold)).monospacedDigit()
                 .foregroundStyle(.white)
-                .frame(width: size * 0.30, height: size * 0.30)
-                .background(Palette.badge, in: RoundedRectangle(cornerRadius: size * 0.08, style: .continuous))
+                .frame(width: size * 0.27, height: size * 0.27)
+                .background(Palette.badge, in: RoundedRectangle(cornerRadius: size * 0.075, style: .continuous))
         } else {
             Text("\(d)")
                 .font(.rounded(fontSize, bold ? .semibold : .medium)).monospacedDigit()
                 .foregroundStyle(Palette.note)
-                .opacity(focus == .dim ? 0.35 : (focus == .candidate ? 0.6 : 1))
+                .opacity(focus == .dim ? 0.7 : (focus == .candidate && !selected ? 0.85 : 1))
         }
     }
 }
 
-/// Diagonal stroke from bottom-left to top-right.
+/// A shallow strike from lower left to upper right. Flatter than a true diagonal, so it crosses
+/// the stems of 1, 4 and 7 instead of running along them.
 struct Slash: Shape {
     func path(in rect: CGRect) -> Path {
         var p = Path()
-        p.move(to: CGPoint(x: rect.minX, y: rect.maxY))
-        p.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+        p.move(to: CGPoint(x: rect.minX, y: rect.maxY - rect.height * 0.22))
+        p.addLine(to: CGPoint(x: rect.maxX, y: rect.minY + rect.height * 0.22))
         return p
     }
 }
@@ -462,13 +468,15 @@ struct Slash: Shape {
 struct ScoreChip: View {
     let pop: ScorePop
     @State var go = false
+    @State var popped = false
+    @State var fade = false
     @Environment(\.accessibilityReduceMotion) var reduceMotion
 
     private var fill: Color {
         switch pop.kind {
         case .points: Palette.badge
-        case .penalty: Palette.error
-        case .hint: Palette.hint
+        case .penalty: Palette.chipLoss
+        case .hint: Palette.chipHint
         }
     }
 
@@ -485,13 +493,15 @@ struct ScoreChip: View {
         .frame(height: 22)
         .background(fill, in: Capsule())
         .fixedSize()
-        .scaleEffect(go || reduceMotion ? 1 : 0.6)
+        .scaleEffect(popped || reduceMotion ? 1 : 0.6)
         .offset(y: go && !reduceMotion ? -28 : 0)
-        .opacity(go ? 0 : 1)
+        .opacity(fade ? 0 : 1)
         .allowsHitTesting(false)
         .onAppear {
-            withAnimation(Motion.pop) { go = false }
+            // Pop to full size first, drift up, and only then fade. A charge holds longer than points, so it gets read.
+            withAnimation(Motion.pop) { popped = true }
             withAnimation(.easeOut(duration: 0.85)) { go = true }
+            withAnimation(.easeIn(duration: 0.4).delay(pop.kind == .points ? 0.5 : 1.0)) { fade = true }
         }
     }
 }

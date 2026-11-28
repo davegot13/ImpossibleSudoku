@@ -45,16 +45,21 @@ enum Palette {
     static let ink2 = Color(light: 0x55577A, dark: 0xB4B6E0)
     static let pencil = Color(light: 0x343BC9, dark: 0xA4AAFF, lightHC: 0x262CA8, darkHC: 0xC4C8FF)
     static let note = Color(light: 0x5D6088, dark: 0xB0B2DC, lightHC: 0x1B1C3A, darkHC: 0xECEBFF)
-    static let peer = Color(light: 0xEEEEF9, dark: 0x262960, lightHC: 0xE3E4F7, darkHC: 0x30347A)
+    static let peer = Color(light: 0xE6E7F7, dark: 0x2A2D68, lightHC: 0xDADCF4, darkHC: 0x30347A)
     static let selectFill = Color(light: 0xFFE8A3, dark: 0x3A3D85)
     static let selectRing = Color(light: 0x2E3192, dark: 0xFFC94A)
-    static let candidate = Color(light: 0xFFE2D6, dark: 0x55304C)
+    static let candidate = Color(light: 0xFFE8DE, dark: 0x432B4D)
     static let focusFill = Color(hex: 0xF2532F)
     static let badge = Color(hex: 0xD93D1C)
     static let slash = Color(light: 0xE62E3D, dark: 0xFF5A64)
     static let error = Color(light: 0xD7262B, dark: 0xFF6A72)
     static let errorFill = Color(light: 0xFFD9D6, dark: 0x5A2236)
-    static let hint = Color(light: 0x0E8A6C, dark: 0x2FD4A7)
+    static let hint = Color(light: 0x0A7A60, dark: 0x2FD4A7)
+    /// Fixed fills for score chips, dark enough for white text in both schemes.
+    static let chipLoss = Color(hex: 0xD7262B)
+    static let chipHint = Color(hex: 0x0A7A60)
+    /// Coral for small text on paper (eyebrows, badge labels): 4.5:1 or better in both schemes.
+    static let coralText = Color(light: 0xC23212, dark: 0xFF8A70)
     static let hintFill = Color(light: 0xD9F5EC, dark: 0x1E4A55)
 
     // Keys

@@ -97,6 +97,14 @@ struct RunState: Codable {
     var game: GameState
 }
 
+extension RunState {
+    /// Nothing has happened in this run yet, so replacing it loses nothing.
+    var untouched: Bool {
+        solved == 0 && score == 0 && hearts == Rules.hearts
+            && game.points == 0 && game.mistakes == 0 && game.hints == 0 && game.reveals == 0
+    }
+}
+
 struct Best: Codable {
     var run = 0
     var fastest = 0
@@ -108,15 +116,20 @@ struct SaveData: Codable {
     var run: RunState?
     var bests: [String: Best] = [:]
     var played: [String: [Int]] = [:]
+    /// A hint the player paid for and has not used yet, with the puzzle it belongs to.
+    var hint: HintInfo?
+    var hintPuzzle: String?
 }
 
 extension SaveData {
-    enum CodingKeys: String, CodingKey { case run, bests, played }
+    enum CodingKeys: String, CodingKey { case run, bests, played, hint, hintPuzzle }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         run = try? c.decodeIfPresent(RunState.self, forKey: .run)   // a bad run never costs the bests
         bests = (try? c.decodeIfPresent([String: Best].self, forKey: .bests)) ?? [:]
         played = (try? c.decodeIfPresent([String: [Int]].self, forKey: .played)) ?? [:]
+        hint = try? c.decodeIfPresent(HintInfo.self, forKey: .hint)
+        hintPuzzle = try? c.decodeIfPresent(String.self, forKey: .hintPuzzle)
     }
 }
 
@@ -144,8 +157,8 @@ enum Rules {
     static func par(_ rating: Double) -> Double { ((15 + (rating - 4) * 15) * 60).rounded() }
 }
 
-struct HintInfo {
-    enum Kind { case place, stuck }
+struct HintInfo: Codable {
+    enum Kind: String, Codable { case place, stuck }
     var kind: Kind
     var cell: Int
     var digit: Int
@@ -183,6 +196,8 @@ struct RunOverSummary {
     var bestCombo: Int
     var score: Int
     var newBest: Bool
+    /// False when the player ended the run themselves.
+    var outOfHearts = true
 }
 
 enum Overlay {

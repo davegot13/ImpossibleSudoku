@@ -58,6 +58,9 @@ final class GameStore: ObservableObject {
     private(set) var solution: [Int] = []
     private var dragMode: Bool? = nil   // true adds cells, false removes
     private var dragLast = -1
+    private var dragStart = -1
+    /// A digit has gone into the cells picked in Notes; the next tap elsewhere starts a new pick.
+    private var notesUsed = false
     private var sinceSave: Double = 0
     private let saveURL: URL
 
@@ -109,12 +112,16 @@ final class GameStore: ObservableObject {
               let s = try? JSONDecoder().decode(SaveData.self, from: data) else { return }
         run = s.run; bests = s.bests; played = s.played
         clock.elapsed = s.run?.game.elapsed ?? 0
+        // A hint that was paid for comes back with its puzzle.
+        if let h = s.hint, let g = s.run?.game, s.hintPuzzle == g.puzzle,
+           g.vals.count == 81, (0..<81).contains(h.cell), g.vals[h.cell] == 0 { hint = h }
     }
 
     func save() {
         sinceSave = 0
         syncElapsed()
-        let s = SaveData(run: run, bests: bests, played: played)
+        var s = SaveData(run: run, bests: bests, played: played)
+        if let h = hint, let g = run?.game, frozen == nil { s.hint = h; s.hintPuzzle = g.puzzle }
         if let data = try? JSONEncoder().encode(s) { try? data.write(to: saveURL, options: .atomic) }
     }
 
@@ -182,7 +189,8 @@ final class GameStore: ObservableObject {
         let keptHint = keepHint ? hint : nil
         solution = Sudoku.solve(Sudoku.parse(r.game.puzzle)).solution ?? []
         clock.elapsed = r.game.elapsed
-        selection = []; primary = -1; notesMode = false; digitHighlight = 0
+        selection = []; primary = -1; digitHighlight = 0; notesUsed = false
+        if !keepHint { notesMode = false }   // coming back to the same puzzle keeps the mode the player left it in
         paused = false; hint = keptHint; hintCardOpen = false; overlay = nil
         frozen = nil; celebrating = false; wrongEntry = nil; unitFlash = nil; digitPulse = nil; pops = []
         dragMode = nil
@@ -266,34 +274,59 @@ final class GameStore: ObservableObject {
 
     func touchBegan(_ i: Int) {
         guard isInteractive, (0..<81).contains(i), let g = run?.game else { return }
-        if notesMode {
-            // Notes view: tap toggles a cell in the selection, drag sweeps cells in or out.
-            if selection.count == 1, primary >= 0, g.vals[primary] != 0 {
-                let same = primary == i
-                selection = []; primary = -1
-                if same { dragMode = nil; return }
+        let v = g.vals[i]
+        let loneFilled = selection.count == 1 && primary >= 0 && g.vals[primary] != 0
+        if v != 0 {
+            // A number on the board is a highlight switch: one tap lights up every match,
+            // a tap on any lit number turns the highlight off again. Same in both modes.
+            dragMode = nil
+            if focusDigit == v {
+                digitHighlight = 0
+                if loneFilled || !notesMode { selection = []; primary = -1 }
+            } else if notesMode {
+                // Keep the empty cells picked for notes; only the highlight changes.
+                if loneFilled { selection = []; primary = -1 }
+                digitHighlight = v
+            } else {
+                selection = [i]; primary = i
+                digitHighlight = 0
             }
+            onEvent?(.select)
+            return
+        }
+        if notesMode {
+            // Notes view: tap toggles an empty cell in the selection, drag sweeps cells in or out.
+            if loneFilled { selection = []; primary = -1 }
+            // Once a digit has gone into the picked cells, a tap elsewhere starts a new pick instead of growing the old one.
+            if notesUsed && !selection.contains(i) { selection = []; primary = -1; notesUsed = false }
             dragMode = !selection.contains(i)
-            dragLast = -1
+            dragStart = i; dragLast = -1
             dragTo(i)
         } else {
-            // Tapping the selected cell keeps it selected, so a quick second tap before a digit never drops the target.
+            // Tapping the selected empty cell keeps it selected, so a quick second tap before a digit never drops the target.
             selection = [i]; primary = i
-            if primary >= 0 && g.vals[primary] != 0 { digitHighlight = 0 }
             onEvent?(.select)
         }
     }
 
     func touchMoved(_ i: Int) {
         guard dragMode != nil, isInteractive else { return }
+        // A drag that starts on a picked cell and moves onto an unpicked one is growing the pick, not shrinking it.
+        if dragMode == false, dragLast == dragStart, i != dragStart, (0..<81).contains(i), (0..<81).contains(dragStart),
+           !selection.contains(i) {
+            dragMode = true
+            selection.insert(dragStart)
+        }
         dragTo(i)
     }
 
-    func touchEnded() { dragMode = nil; dragLast = -1 }
+    func touchEnded() { dragMode = nil; dragLast = -1; dragStart = -1 }
 
     private func dragTo(_ i: Int) {
         guard let add = dragMode, i != dragLast, (0..<81).contains(i) else { return }
         dragLast = i
+        // Notes only go in empty cells, so a sweep passes over filled ones.
+        if add, let g = run?.game, g.vals[i] != 0 { return }
         let before = selection.count
         if add { selection.insert(i); primary = i }
         else { selection.remove(i); primary = selection.sorted().last ?? -1 }
@@ -319,13 +352,28 @@ final class GameStore: ObservableObject {
         input(d)
     }
 
-    func clearSelection() { selection = []; primary = -1 }
+    func clearSelection() { selection = []; primary = -1; notesUsed = false }
+
+    /// A tap on empty background: nothing stays selected or lit.
+    func clearAll() {
+        guard isInteractive, !hintCardOpen else { return }
+        clearSelection()
+        digitHighlight = 0
+    }
 
     func toggleNotes() {
         notesMode.toggle()
-        if !notesMode && selection.count > 1 {
-            selection = primary >= 0 ? [primary] : []
-        }
+        notesUsed = false
+        onEvent?(.select)
+        // Leaving Notes with several cells picked drops them all, so no stray cell is left armed for a real digit.
+        if !notesMode && selection.count > 1 { selection = []; primary = -1 }
+    }
+
+    /// Whether Undo and Erase have anything to act on (the buttons dim when they don't).
+    var canUndo: Bool { run?.game.undo.isEmpty == false }
+    var canErase: Bool {
+        guard let g = run?.game else { return false }
+        return selection.contains { g.vals[$0] == 0 && g.notes[$0] != 0 }
     }
 
     func moveSelection(dr: Int, dc: Int) {
@@ -345,33 +393,36 @@ final class GameStore: ObservableObject {
         let targets = selection.filter { r.game.vals[$0] == 0 }.sorted()
         if targets.isEmpty || !isInteractive {
             // With nothing to fill, a digit key just lights up that digit (allowed any time the board is visible).
+            // Pressing the lit digit again turns the highlight off.
             if frozen == nil && !paused {
-                digitHighlight = digitHighlight == d ? 0 : d
-                if !notesMode && isInteractive { clearSelection() }
+                let wasOn = focusDigit == d
+                if isInteractive { clearSelection() }   // only filled cells can be selected here
+                digitHighlight = wasOn ? 0 : d
             }
             return
         }
         if notesMode {
-            // A digit already noted gets crossed out (or restored if every one is crossed); a missing digit gets added.
+            // One key walks a note through its three states: add it, cross it out, remove it.
             pushUndo(&r.game)
             let withNote = targets.filter { r.game.notes[$0] & b != 0 }
             if withNote.isEmpty {
                 for i in targets { r.game.notes[i] |= b; r.game.cross[i] &= ~b }
             } else if withNote.allSatisfy({ r.game.cross[$0] & b != 0 }) {
-                for i in withNote { r.game.cross[i] &= ~b }
+                for i in withNote { r.game.notes[i] &= ~b; r.game.cross[i] &= ~b }
             } else {
                 for i in withNote { r.game.cross[i] |= b }
             }
             run = r
             digitHighlight = d
+            notesUsed = true
             onEvent?(.note)
             save()
             return
         }
         let cell = targets[0]
         if r.game.vals.filter({ $0 == d }).count == 9 {
-            // All nine are placed, so this can only be wrong: light the digit up instead of costing a heart.
-            digitHighlight = d
+            // All nine are placed, so this can only be wrong: light the digit up (or switch it off) instead of costing a heart.
+            digitHighlight = digitHighlight == d ? 0 : d
             return
         }
         guard cell < solution.count else { return }
@@ -379,6 +430,8 @@ final class GameStore: ObservableObject {
             digitHighlight = d
             placeCorrect(cell, d, scored: true)
         } else {
+            // The digit that was just rejected here is still showing: a repeat (a double tap) must not cost a second heart.
+            if let w = wrongEntry, w.cell == cell, w.digit == d { return }
             mistake(cell, d)
         }
     }
@@ -411,7 +464,8 @@ final class GameStore: ObservableObject {
             addPop(i, "+\(pts.formatted())", combo: combo, kind: .points)
         }
         run = r
-        hint = nil; hintCardOpen = false
+        // A paid hint stays until the board moves on from it: its own cell is filled, or one of its pattern cells is.
+        if let h = hint, h.cell == i || h.keyCells.contains(i) { hint = nil; hintCardOpen = false }
         if wrongEntry?.cell == i { wrongEntry = nil }
         onEvent?(.placed(cell: i, digit: d, points: pts, combo: r.game.combo, revealed: !scored))
 
@@ -448,8 +502,11 @@ final class GameStore: ObservableObject {
         wrongEntry = w
         addPop(i, "−\(Rules.mistakeCost)", kind: .penalty)
         onEvent?(.mistake(cell: i, heartsLeft: r.hearts))
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
-            if self?.wrongEntry == w { self?.wrongEntry = nil }
+        // On the last heart the wrong digit stays in its cell, so the result card shows where the run ended.
+        if r.hearts > 0 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+                if self?.wrongEntry == w { self?.wrongEntry = nil }
+            }
         }
         save()
         if r.hearts <= 0 {
@@ -465,6 +522,7 @@ final class GameStore: ObservableObject {
         pushUndo(&r.game)
         for i in ts { r.game.notes[i] = 0; r.game.cross[i] = 0 }
         run = r
+        if notesMode { notesUsed = true }
         onEvent?(.note)
         save()
     }
@@ -482,9 +540,12 @@ final class GameStore: ObservableObject {
 
     func autoNotes() {
         guard isInteractive, var r = run else { return }
-        pushUndo(&r.game)
         let c = Sudoku.basicCandidates(r.game.vals)
-        for i in 0..<81 where r.game.vals[i] == 0 { r.game.notes[i] = c[i]; r.game.cross[i] &= c[i] }
+        var g = r.game
+        for i in 0..<81 where g.vals[i] == 0 { g.notes[i] = c[i]; g.cross[i] &= c[i] }
+        guard g.notes != r.game.notes || g.cross != r.game.cross else { return }   // nothing to add: no empty Undo step
+        pushUndo(&r.game)
+        r.game.notes = g.notes; r.game.cross = g.cross
         run = r
         onEvent?(.note)
         save()
@@ -494,10 +555,8 @@ final class GameStore: ObservableObject {
 
     func requestHint() {
         guard isInteractive, var r = run, r.game.vals.contains(0) else { return }
-        if let h = hint {
-            if h.kind == .place && !hintCardOpen { revealHint(h.cell) } else { hintCardOpen = true }
-            return
-        }
+        // A hint already paid for opens again for free. Revealing is only ever the priced button on the card.
+        if hint != nil { hintCardOpen = true; return }
         r.game.hints += 1; r.game.combo = 1; r.game.lastAt = -1
         let before = r.score
         r.score -= Rules.hintCost
@@ -513,11 +572,14 @@ final class GameStore: ObservableObject {
             var bestCell = -1, bestN = 10
             for i in 0..<81 where r.game.vals[i] == 0 && Sudoku.popcount[c[i]] < bestN { bestN = Sudoku.popcount[c[i]]; bestCell = i }
             guard bestCell >= 0, bestCell < solution.count else { return }
-            hint = HintInfo(kind: .stuck, cell: bestCell, digit: solution[bestCell], title: "Beyond the technique list",
-                            body: "The next step here needs a forcing chain or similar, which hints don't explain yet. You can reveal the outlined cell, the one with the fewest candidates.",
+            hint = HintInfo(kind: .stuck, cell: bestCell, digit: solution[bestCell], title: "No short step here",
+                            body: "The next step needs a long chain of logic that hints can't explain yet. You can reveal the outlined cell, the one with the fewest possible digits.",
                             keyCells: [])
             addPop(bestCell, "−\(Rules.hintCost)", kind: .hint)
         }
+        // The outlined cell becomes the selected one, so the next digit goes where the hint points.
+        if !notesMode, let h = hint { selection = [h.cell]; primary = h.cell }
+        digitHighlight = 0   // the hint's outlines are the only highlight while it is fresh
         hintCardOpen = true
         onEvent?(.hint)
         save()
@@ -534,7 +596,7 @@ final class GameStore: ObservableObject {
         placeCorrect(cell, solution[cell], scored: false)
     }
 
-    /// Closes the card; a technique hint keeps its highlights and the Hint button becomes Reveal.
+    /// Closes the card; the hint keeps its outlines and the Hint button opens it again for free.
     func closeHintCard() {
         hintCardOpen = false
     }
@@ -561,6 +623,7 @@ final class GameStore: ObservableObject {
             if fastPB { $0.fastest = max(1, Int(g.elapsed)) }
         }
         frozen = r                      // keep the finished board on screen behind the summary
+        hint = nil; hintCardOpen = false
         if let next = newGame(r.tier) {
             r.game = next
             solution = Sudoku.solve(Sudoku.parse(next.puzzle)).solution ?? []
@@ -584,13 +647,32 @@ final class GameStore: ObservableObject {
 
     private func runOver() {
         guard let r = run, r.hearts <= 0, overlay == nil else { celebrating = false; return }
+        showRunResult(r, outOfHearts: true)
+    }
+
+    /// The player chose to end the run. On the game screen they get the same result card as running out of hearts.
+    func endRun() {
+        guard let r = run else { return }
+        if screen == .game {
+            paused = false; overlay = nil
+            showRunResult(r, outOfHearts: false)
+        } else {
+            finishRun()
+            hint = nil; hintCardOpen = false
+        }
+    }
+
+    private func showRunResult(_ r: RunState, outOfHearts: Bool) {
         let previousBest = best(r.tier).run
         frozen = r
         let pb = finishRun()
         celebrating = false
+        hint = nil; hintCardOpen = false
+        selection = []; primary = -1; digitHighlight = 0; notesUsed = false
         onEvent?(.runOver)
         overlay = .runOver(RunOverSummary(previousBest: previousBest, tier: r.tier, rating: r.game.rating, tech: r.game.tech,
-                                          solved: r.solved, bestCombo: r.bestCombo, score: r.score, newBest: pb))
+                                          solved: r.solved, bestCombo: r.bestCombo, score: r.score, newBest: pb,
+                                          outOfHearts: outOfHearts))
         if pb { DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { [weak self] in self?.onEvent?(.newBest) } }
     }
 
@@ -607,7 +689,8 @@ final class GameStore: ObservableObject {
         let p = ScorePop(cell: cell, text: text, combo: combo, kind: kind)
         pops.append(p)
         if pops.count > 6 { pops.removeFirst(pops.count - 6) }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.95) { [weak self] in
+        // Charges stay up a little longer than points, so a loss is never missed.
+        DispatchQueue.main.asyncAfter(deadline: .now() + (kind == .points ? 0.95 : 1.5)) { [weak self] in
             self?.pops.removeAll { $0.id == p.id }
         }
     }

@@ -101,6 +101,9 @@ struct GameView: View {
                 }
             }
         }
+        // A tap on empty background lets go of the selection and the highlight. The board and every button answer first.
+        .contentShape(Rectangle())
+        .onTapGesture { store.clearAll() }
         .focusable()
         .focused($keyboardFocused)
         .focusEffectDisabled()
@@ -118,18 +121,27 @@ struct GameView: View {
     private func portrait(_ run: RunState, _ L: GameLayout) -> some View {
         let board = L.portraitBoard
         let slack = max(0, L.size.height - L.headerH - board - L.controlsH - 8)
+        // The hint card may rise from the controls into the gap under the board, stopping just short of the board.
+        let gapBelowBoard = max(10, slack + 4 - max(6, slack * 0.5))
+        let hintRoom = L.controlsH + gapBelowBoard - 6
+        // Short phones (iPhone SE, the Duo's outer screen) leave the card room for about one line of text.
+        // While the card is open there, the header folds to its one-row form and the board moves up,
+        // which hands the card the 52 points the second header row was using.
+        let foldHeader = store.hintCardOpen && store.hint != nil && !L.compact && !L.roomy && hintRoom < 200
+        let headerH: CGFloat = foldHeader ? 56 : L.headerH
         return VStack(spacing: 0) {
-            GameHeader(run: run, compact: L.compact, isPad: L.isPad)
-                .frame(width: board, height: L.headerH)
+            GameHeader(run: run, compact: L.compact || foldHeader, isPad: L.isPad)
+                .frame(width: board, height: headerH)
             Spacer(minLength: 6).frame(maxHeight: max(6, slack * 0.5))
             BoardView(game: run.game, side: board, gutter: L.gutter, outerRadius: L.outerRadius)
                 .frame(width: board, height: board)
             Spacer(minLength: 10)
-            ControlsView(layout: L, padColumns: 9)
-                .frame(width: board, height: L.controlsH)
+            ControlsView(layout: L, padColumns: 9, hintRoom: hintRoom + (L.headerH - headerH))
+                .frame(width: board, height: L.controlsH, alignment: .bottom)
                 .padding(.bottom, 4)
         }
         .frame(maxWidth: .infinity)
+        .animation(Motion.sheet, value: foldHeader)
     }
 
     @ViewBuilder
@@ -398,25 +410,24 @@ struct StatusLine: View {
                             .font(Typo.footnote.weight(.semibold))
                             .foregroundStyle(Palette.onGround)
                             .padding(.horizontal, 10)
-                            .frame(height: 24)
+                            .frame(height: 20)   // no taller than the status line, so the score above never shrinks
                             .background(Palette.surface, in: Capsule())
                             .overlay(Capsule().strokeBorder(Palette.hairline))
-                            .padding(.vertical, 10)
+                            .padding(.vertical, 12)
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .padding(.vertical, -10)
+                    .padding(.vertical, -12)
                     .accessibilityLabel("Clear selection")
                 }
             } else if store.notesMode {
-                Label("Notes · drag to select more", systemImage: "pencil")
+                Label("Notes · tap or drag to pick cells", systemImage: "pencil")
                     .labelStyle(.titleAndIcon)
             } else if compact {
                 Text("\(run.tier.name) \(String(format: "%.1f", run.game.rating)) · Puzzle \(store.frozen != nil ? max(1, run.solved) : run.solved + 1)")
             } else {
-                HStack(spacing: 6) {
-                    Text(run.solved == 0 ? "First puzzle of the run" : "\(run.solved) solved this run")
-                }
+                // The time to beat, shown while it can still be beaten: the bonus should not be a surprise at the end.
+                ParLine(clock: store.clock, par: Rules.par(run.game.rating), frozenTime: store.frozen?.game.elapsed)
             }
         }
         .font(Typo.footnote)
@@ -424,6 +435,16 @@ struct StatusLine: View {
         .lineLimit(1)
         .minimumScaleFactor(0.8)
         .frame(minHeight: 20, alignment: .leading)
+    }
+}
+
+/// "Beat 19:30 for a time bonus", until the time has passed.
+struct ParLine: View {
+    @ObservedObject var clock: GameClock
+    let par: Double
+    var frozenTime: Double? = nil
+    var body: some View {
+        Text((frozenTime ?? clock.elapsed) <= par ? "Beat \(formatTime(par)) for a time bonus" : "No time bonus past \(formatTime(par))")
     }
 }
 
@@ -495,7 +516,8 @@ struct ComboRing: View {
     @Environment(\.accessibilityReduceMotion) var reduceMotion
 
     private var tint: Color { combo >= 5 ? Palette.gold : combo >= 2 ? Palette.coral : Palette.onGround2 }
-    private var urgent: Bool { fraction > 0 && fraction < 0.25 }
+    /// The last 5 seconds only matter when there is a combo to lose.
+    private var urgent: Bool { combo >= 2 && fraction > 0 && fraction < 0.25 }
 
     var body: some View {
         ZStack {
@@ -507,7 +529,7 @@ struct ComboRing: View {
                     .foregroundStyle(combo > 1 ? tint : Palette.onGround3)
                     .contentTransition(.numericText(value: Double(combo)))
                 if combo >= 5 && diameter >= 56 {
-                    Text("MAX").font(.rounded(8, .heavy)).tracking(0.8).foregroundStyle(Palette.gold)
+                    Text("MAX").font(.rounded(10, .heavy)).tracking(0.5).foregroundStyle(Palette.gold)
                 }
             }
         }
@@ -534,7 +556,7 @@ struct ComboRing: View {
             .rotationEffect(.degrees(-90))
             .animation(.linear(duration: 0.25), value: fraction)
         if urgent && !reduceMotion {
-            base.phaseAnimator([1.0, 0.4]) { v, o in v.opacity(o) } animation: { _ in .easeInOut(duration: 0.25) }
+            base.phaseAnimator([1.0, 0.6]) { v, o in v.opacity(o) } animation: { _ in .easeInOut(duration: 0.5) }
         } else {
             base
         }

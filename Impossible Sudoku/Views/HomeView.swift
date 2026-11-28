@@ -97,13 +97,13 @@ struct HomeView: View {
             Button("Start new run", role: .destructive) { begin(t) }
             Button("Cancel", role: .cancel) {}
         } message: { _ in
-            Text("This ends your current run. Its score still counts toward your best.")
+            Text("This ends your current run. " + endRunMessage(store.run))
         }
         .alert("End this run?", isPresented: $confirmEnd) {
-            Button("End run", role: .destructive) { _ = store.finishRun() }
+            Button("End run", role: .destructive) { store.endRun() }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Your score still counts toward your best.")
+            Text(endRunMessage(store.run))
         }
     }
 
@@ -181,7 +181,8 @@ struct HomeView: View {
 
     private func tapTier(_ t: Tier) {
         if Edition.isLocked(t) { store.showFullApp = true; return }
-        if store.run != nil { pendingTier = t } else { begin(t) }
+        // Only ask when there is something to lose: a run with nothing done yet is replaced without a warning.
+        if let r = store.run, !r.untouched { pendingTier = t } else { begin(t) }
     }
 
     private func begin(_ t: Tier) {
@@ -245,9 +246,9 @@ struct TierCard: View {
     private var stats: [String] {
         var s: [String] = []
         if best.run > 0 { s.append("Best \(best.run.formatted())") }
-        if best.fastest > 0 { s.append(formatTime(Double(best.fastest))) }
+        if best.fastest > 0 { s.append("Fastest \(formatTime(Double(best.fastest)))") }
         if best.solved > 0 { s.append("\(best.solved) solved") }
-        if best.combo > 1 { s.append("×\(best.combo)") }
+        if best.combo > 1 { s.append("Combo ×\(best.combo)") }
         return s
     }
 
@@ -261,7 +262,7 @@ struct TierCard: View {
                         .font(Typo.footnote.weight(.semibold))
                         .foregroundStyle(Palette.gold)
                         .padding(.horizontal, 8).padding(.vertical, 2)
-                        .background(Palette.gold.opacity(0.16), in: Capsule())
+                        .background(Palette.gold.opacity(0.10), in: Capsule())
                 }
                 Text(tier.blurb).font(Typo.callout).foregroundStyle(Palette.onGround2).lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
@@ -302,7 +303,7 @@ struct ResumeCard: View {
         HStack(spacing: 14) {
             MiniBoardView(game: run.game, size: 72)
             VStack(alignment: .leading, spacing: 3) {
-                Text("Continue run").eyebrowStyle(Color.white.opacity(0.85))
+                Text("Continue run").eyebrowStyle(Color.white)
                 Text("\(run.tier.name) · Puzzle \(run.solved + 1)").font(Typo.headline).foregroundStyle(.white)
                 HStack(spacing: 8) {
                     Text(run.score, format: .number).monospacedDigit()
@@ -314,7 +315,7 @@ struct ResumeCard: View {
                     Text(formatTime(run.game.elapsed)).monospacedDigit()
                 }
                 .font(Typo.footnote)
-                .foregroundStyle(Color.white.opacity(0.92))
+                .foregroundStyle(Color.white)
             }
             Spacer(minLength: 4)
             VStack(spacing: 6) {

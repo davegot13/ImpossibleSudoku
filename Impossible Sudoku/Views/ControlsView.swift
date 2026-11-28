@@ -4,6 +4,8 @@ struct ControlsView: View {
     @EnvironmentObject var store: GameStore
     let layout: GameLayout
     let padColumns: Int
+    /// Height the hint card may use, measured up from the bottom of the controls (nil: the controls' own frame).
+    var hintRoom: CGFloat? = nil
 
     private var keyH: CGFloat { padColumns == 3 ? layout.panelKey : layout.keyH }
     private var spacing: CGFloat { padColumns == 3 ? 10 : layout.keySpacing }
@@ -12,16 +14,18 @@ struct ControlsView: View {
         ZStack(alignment: .bottom) {
             VStack(spacing: layout.toolGap) {
                 HStack(spacing: 4) {
-                    ToolButton(title: "Undo", symbol: "arrow.uturn.backward", height: layout.toolH,
+                    ToolButton(title: "Undo", symbol: "arrow.uturn.backward", height: layout.toolH, enabled: store.canUndo,
                                hint: "Undoes the last change to your notes.") { store.undo() }
-                    ToolButton(title: "Erase", symbol: "eraser", height: layout.toolH,
+                    ToolButton(title: "Erase", symbol: "eraser", height: layout.toolH, enabled: store.canErase,
                                hint: "Clears notes in the selected cells.") { store.erase() }
                     ToolButton(title: "Notes", symbol: "pencil", height: layout.toolH, isToggle: true, on: store.notesMode,
-                               hint: "When on, digits add, cross out or restore notes.") { store.toggleNotes() }
+                               hint: "When on, digits add, cross out or remove notes.") { store.toggleNotes() }
                     ToolButton(title: "Auto notes", symbol: "wand.and.stars", height: layout.toolH,
                                hint: "Fills every empty cell with its possible digits.") { store.autoNotes() }
-                    ToolButton(title: revealMode ? "Reveal" : "Hint", symbol: revealMode ? "eye" : "lightbulb", height: layout.toolH,
-                               hint: revealMode ? "Places the digit. Costs \(Rules.revealCost) points." : "Names the next technique. Costs \(Rules.hintCost) points.") {
+                    // The price is on the button before the tap. A hint already paid for opens again for free.
+                    ToolButton(title: hintPaid ? "Show hint" : "Hint −\(Rules.hintCost)", symbol: hintPaid ? "lightbulb.fill" : "lightbulb",
+                               height: layout.toolH, spokenTitle: hintPaid ? "Show hint" : "Hint",
+                               hint: hintPaid ? "Opens the hint you already paid for." : "Names the next technique. Costs \(Rules.hintCost) points.") {
                         store.requestHint()
                     }
                 }
@@ -35,20 +39,32 @@ struct ControlsView: View {
                     }
                 }
             }
+            // A tap that lands between two keys does nothing, instead of falling through to the background.
+            .contentShape(Rectangle())
+            .onTapGesture {}
             .accessibilityHidden(store.hintCardOpen)
 
             if store.hintCardOpen, let h = store.hint {
-                HintCard(hint: h, minHeight: layout.toolH + layout.toolGap + (padColumns == 3 ? 3 * keyH + 2 * spacing : keyH))
+                // The card covers the controls and may grow upward into the gap under the board, never past the screen edge.
+                // When room is short it first drops the helper line; if the text still doesn't fit, it scrolls and the buttons stay put.
+                let cover = layout.toolH + layout.toolGap + (padColumns == 3 ? 3 * keyH + 2 * spacing : keyH)
+                let tight = (hintRoom ?? .infinity) < 200
+                Color.clear
+                    .frame(height: hintRoom.map { max($0, cover) })
+                    .overlay(alignment: .bottom) {
+                        ViewThatFits(in: .vertical) {
+                            HintCard(hint: h, minHeight: cover, tight: tight)
+                            HintCard(hint: h, minHeight: cover, tight: tight, helper: false)
+                            HintCard(hint: h, minHeight: cover, tight: tight, helper: false, scrolls: true)
+                        }
+                    }
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
         .animation(Motion.sheet, value: store.hintCardOpen)
     }
 
-    private var revealMode: Bool {
-        if let h = store.hint, h.kind == .place, !store.hintCardOpen { return true }
-        return false
-    }
+    private var hintPaid: Bool { store.hint != nil }
 }
 
 struct ToolButton: View {
@@ -57,6 +73,10 @@ struct ToolButton: View {
     let height: CGFloat
     var isToggle = false
     var on = false
+    /// False when the tool has nothing to act on: it dims and ignores taps.
+    var enabled = true
+    /// VoiceOver name when the visible title carries extras such as a price.
+    var spokenTitle: String? = nil
     var hint: String = ""
     let action: () -> Void
     @Environment(\.dynamicTypeSize) var typeSize
@@ -67,6 +87,7 @@ struct ToolButton: View {
                 Image(systemName: symbol)
                     .font(.system(size: 21, weight: .medium))
                     .symbolEffect(.bounce, value: on)
+                    .frame(height: 24)   // one baseline for all five labels, whatever the symbol's height
                 if !typeSize.isAccessibilitySize {
                     Text(title).font(.rounded(11, .semibold)).lineLimit(1).minimumScaleFactor(0.75)
                 }
@@ -83,7 +104,10 @@ struct ToolButton: View {
         }
         .buttonStyle(ToolPressStyle())
         .hoverEffect(.highlight)
-        .accessibilityLabel(title)
+        .disabled(!enabled)
+        .opacity(enabled ? 1 : 0.38)
+        .animation(.easeOut(duration: 0.15), value: enabled)
+        .accessibilityLabel(spokenTitle ?? title)
         .accessibilityValue(isToggle ? (on ? "On" : "Off") : "")
         .accessibilityAddTraits(isToggle ? .isToggle : [])
         .accessibilityHint(hint)
@@ -117,12 +141,13 @@ struct PadKey: View {
                     .foregroundStyle(highlighted ? Color.white : (notesMode ? Palette.note : Palette.pencil))
                 Group {
                     if remaining == 0 {
-                        Image(systemName: "checkmark").font(.system(size: 10, weight: .bold))
+                        Image(systemName: "checkmark").font(.system(size: 11, weight: .bold))
                     } else {
-                        Text("\(remaining)").font(.rounded(11, .semibold)).monospacedDigit()
+                        Text("\(remaining)").font(.rounded(12, .semibold)).monospacedDigit()
                     }
                 }
-                .foregroundStyle(highlighted ? Color.white.opacity(0.85) : Palette.note.opacity(0.75))
+                .frame(height: 14)
+                .foregroundStyle(highlighted ? Color.white : Palette.note)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -133,7 +158,7 @@ struct PadKey: View {
         .accessibilityLabel("\(digit)")
         .accessibilityValue(remaining == 0 ? "All placed" : "\(remaining) left")
         .accessibilityAddTraits(highlighted ? .isSelected : [])
-        .accessibilityHint(notesMode ? "Adds, crosses out or restores this note in the selected cells." : "Places this digit in the selected cell.")
+        .accessibilityHint(notesMode ? "Adds, crosses out or removes this note in the selected cells." : "Places this digit in the selected cell.")
         .accessibilityShowsLargeContentViewer()
     }
 }
@@ -145,16 +170,18 @@ struct KeyStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         let pressed = configuration.isPressed
-        let drop: CGFloat = done ? 0 : 3
-        let sink: CGFloat = pressed ? min(2, drop) : 0
+        let drop: CGFloat = 3
+        let sink: CGFloat = pressed ? 2 : 0
         let shape = RoundedRectangle(cornerRadius: Metrics.keyRadius, style: .continuous)
         return ZStack {
-            if !done { shape.fill(Palette.keyLip).offset(y: drop) }
+            shape.fill(Palette.keyLip).offset(y: drop)
             shape.fill(face).offset(y: sink)
             configuration.label.offset(y: sink)
         }
         .padding(.bottom, drop)
-        .opacity(done ? 0.45 : 1)
+        // A finished digit fades as one piece, so its number stays readable on its key.
+        .compositingGroup()
+        .opacity(done ? 0.6 : 1)
         .animation(Motion.press, value: pressed)
         .contentShape(Rectangle().inset(by: -2.5))
     }
@@ -164,6 +191,12 @@ struct HintCard: View {
     @EnvironmentObject var store: GameStore
     let hint: HintInfo
     let minHeight: CGFloat
+    /// Short screens: slimmer padding so one more line of text fits.
+    var tight = false
+    /// The line that explains the outlines. It is the first thing to go when room is short.
+    var helper = true
+    /// The fallback when the text is taller than the room available: the text scrolls, the buttons stay.
+    var scrolls = false
     @AccessibilityFocusState var focused: Bool
 
     private var closeTitle: String { hint.kind == .place ? "Got it" : "Keep trying" }
@@ -171,7 +204,7 @@ struct HintCard: View {
     var body: some View {
         HStack(spacing: 0) {
             Rectangle().fill(Palette.hint).frame(width: 4)
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: tight ? 6 : 8) {
                 HStack(spacing: 6) {
                     Image(systemName: "lightbulb.fill").foregroundStyle(Palette.hint)
                     Text(hint.title).font(Typo.headline).foregroundStyle(Palette.ink)
@@ -179,23 +212,20 @@ struct HintCard: View {
                 .accessibilityElement(children: .combine)
                 .accessibilityAddTraits(.isHeader)
                 .accessibilityFocused($focused)
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(hint.body).font(Typo.callout).foregroundStyle(Palette.ink)
-                        .fixedSize(horizontal: false, vertical: true)
-                    if hint.kind == .place {
-                        Text(hint.keyCells.subtracting([hint.cell]).isEmpty
-                             ? "The outlined cell is the one you can fill."
-                             : "Dashed outlines mark the pattern. The solid outline is the cell you can fill.")
-                            .font(Typo.footnote).foregroundStyle(Palette.ink2)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
+                if scrolls {
+                    ScrollView { explanation }
+                        .scrollBounceBehavior(.basedOnSize)
+                        .scrollIndicators(.visible)
+                        .scrollIndicatorsFlash(onAppear: true)
+                } else {
+                    explanation
+                    Spacer(minLength: 0)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                Spacer(minLength: 0)
                 HStack(spacing: 8) {
                     Button(action: { store.closeHintCard() }) {
                         Text(closeTitle).font(Typo.headline).foregroundStyle(Palette.ink2)
                             .padding(.horizontal, 12).frame(minHeight: 44)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     Button(action: { store.revealHint(hint.cell) }) {
@@ -208,15 +238,30 @@ struct HintCard: View {
                     .accessibilityLabel("Reveal the digit, costs \(Rules.revealCost) points")
                 }
             }
-            .padding(14)
+            .padding(tight ? 10 : 12)
             .frame(maxHeight: .infinity, alignment: .top)
         }
-        .frame(maxWidth: .infinity, minHeight: minHeight, alignment: .topLeading)
-        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity, minHeight: scrolls ? nil : minHeight, maxHeight: scrolls ? .infinity : nil, alignment: .topLeading)
+        .fixedSize(horizontal: false, vertical: !scrolls)
         .background(Palette.paper)
         .clipShape(RoundedRectangle(cornerRadius: Metrics.cardRadius, style: .continuous))
         .shadow(color: .black.opacity(0.35), radius: 24, y: 12)
         .dynamicTypeSize(...DynamicTypeSize.xxLarge)
         .onAppear { focused = true }
+    }
+
+    private var explanation: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(hint.body).font(Typo.callout).foregroundStyle(Palette.ink)
+                .fixedSize(horizontal: false, vertical: true)
+            if helper && hint.kind == .place {
+                Text(hint.keyCells.subtracting([hint.cell]).isEmpty
+                     ? "The outlined cell is the one you can fill."
+                     : "Dashed marks the pattern. Solid is the cell to fill.")
+                    .font(Typo.footnote).foregroundStyle(Palette.ink2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
